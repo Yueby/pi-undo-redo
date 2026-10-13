@@ -27,8 +27,18 @@ function ensureNpmLogin() {
 }
 
 function run(command, args, options = {}) {
-  const result = spawnSync(command, args, { stdio: "inherit", shell: process.platform === "win32" });
+  // Windows resolves `npm` only through the shell (the npm.cmd shim is rejected without
+  // one), and shell mode warns when it concatenates a separate args array (DEP0190), so
+  // Windows receives the command line as one pre-quoted string instead.
+  const result =
+    process.platform === "win32"
+      ? spawnSync([command, ...args].map(quoteShellArg).join(" "), { stdio: "inherit", shell: true })
+      : spawnSync(command, args, { stdio: "inherit" });
   if (result.error) throw result.error;
   if (result.status !== 0 && options.exitOnError !== false) process.exit(result.status ?? 1);
   return result;
+}
+
+function quoteShellArg(value) {
+  return /[\s"&|<>^]/.test(value) ? `"${value.replaceAll('"', '""')}"` : value;
 }
