@@ -128,6 +128,10 @@ export default function undoRedo(pi: ExtensionAPI) {
   });
 
   pi.on("before_agent_start", async (event, ctx) => {
+    // Pi 1.2 also emits this for extension-triggered custom messages, which have
+    // no submitted user prompt and must not invalidate user-turn redo history.
+    if (event.messageType === "custom") return;
+
     redoStack.length = 0;
     pi.appendEntry(REDO_EXT, []);
     active = undefined;

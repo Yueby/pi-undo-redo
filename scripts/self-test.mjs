@@ -17,6 +17,7 @@ async function main() {
   await testGitSnapshot();
   await testUntrackedListingPrunesIgnoredTrees();
   await testCleanTurnSkipsTheAfterSnapshot();
+  await testCustomRunsSkipUserCheckpoints();
   await testTrackedIgnoredPathsStaySnapshotted();
   await testTrackedIgnoredSymlinksStaySnapshotted();
   await testNonGitTouchedPaths();
@@ -191,6 +192,55 @@ async function testCleanTurnSkipsTheAfterSnapshot() {
       `a tool turn must snapshot the worktree again: ${toolTurn.join(" | ") || "(no git calls)"}`,
     );
     assert(toolCheckpoint.beforeSnapshot !== toolCheckpoint.afterSnapshot, "a tool turn must record a new after snapshot");
+  } finally {
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    if (previousTrace === undefined) delete process.env.GIT_TRACE;
+    else process.env.GIT_TRACE = previousTrace;
+    await rm(root, { recursive: true, force: true });
+    await rm(agentDir, { recursive: true, force: true });
+    await rm(storage, { recursive: true, force: true });
+  }
+}
+
+async function testCustomRunsSkipUserCheckpoints() {
+  const root = await mkdtemp(path.join(tmpdir(), "pi-undo-redo-custom-"));
+  const agentDir = await mkdtemp(path.join(tmpdir(), "pi-undo-redo-agent-"));
+  const storage = await mkdtemp(path.join(tmpdir(), "pi-undo-redo-storage-"));
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const previousTrace = process.env.GIT_TRACE;
+  const traceFile = path.join(storage, "git-trace.log");
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  process.env.GIT_TRACE = traceFile;
+  try {
+    git(root, ["init"]);
+    git(root, ["config", "user.name", "self-test"]);
+    git(root, ["config", "user.email", "self-test@example.local"]);
+    writeFileSync(path.join(root, "tracked.txt"), "base\n");
+    git(root, ["add", "tracked.txt"]);
+    git(root, ["commit", "-m", "init"]);
+    writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({ undoRedo: { storageDir: storage } }));
+
+    const session = createFlatSession();
+    session.pushCustom("pi-undo-redo-redo", [{ leafId: "u1" }]);
+    const hook = createHookHarness(root, session);
+    await hook.emit("session_start", {});
+    const customCalls = gitTraceCursor(traceFile);
+    await hook.emit("before_agent_start", {
+      messageType: "custom",
+      message: { customType: "test-follow-up", content: "Continue", display: false },
+    });
+    await hook.emit("message_start", { message: { role: "assistant", content: [] } });
+    await hook.emit("agent_end", {});
+    assert(hook.appended.length === 0, "a custom run must not clear persisted redo history or append a user checkpoint");
+    assert(hook.notifications.length === 0, "a custom run must not warn about a missing submitted user message");
+    assert(!customCalls().some((line) => line.includes("ls-files")), "a custom run must not snapshot a user turn");
+
+    // The Pi 1.2 user variant and older prompt-only events still use normal checkpoints.
+    await hook.emit("before_agent_start", { messageType: "user", prompt: HOOK_PROMPT });
+    await hook.emit("message_start", { message: { role: "assistant", content: [] } });
+    await hook.emit("agent_end", {});
+    assert(hook.appended.some((entry) => entry.customType === "pi-undo-redo"), "the next user run should persist its checkpoint");
   } finally {
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
