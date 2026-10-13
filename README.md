@@ -10,6 +10,8 @@ The extension only records snapshots and navigates the conversation tree; it doe
 
 A dirty guard blocks `/undo`, `/redo`, and `/tree` when unsnapshotted workspace changes would be overwritten.
 
+Checkpoints and redo history track user-prompt runs. An extension-triggered custom-message run (Pi 1.2 `messageType: "custom"`) leaves both untouched, so files written during such a run stay outside that run's undo coverage.
+
 ## Commands
 
 - `/undo` - undo the latest checkpointed user message and restore changed files
